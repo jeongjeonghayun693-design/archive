@@ -7,7 +7,7 @@
  */
 window.ARCHIVE_CONFIG = {
   // 예: "1234567890-abcdefghijklmnop.apps.googleusercontent.com"
-  CLIENT_ID: "여기에_OAuth_클라이언트_ID_붙여넣기",
+  CLIENT_ID: "711676848657-fvqef3asprfnf5dujtjj1henibv2evl2.apps.googleusercontent.com",
 
   // 백업이 쌓일 구글 드라이브 폴더 이름 (앱이 처음 실행될 때 자동 생성)
   DRIVE_FOLDER: "ARCHIVE-Backups",
