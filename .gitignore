@@ -1,0 +1,16 @@
+# 백업 결과물은 구글 드라이브에 두고, 깃에는 절대 올리지 않는다.
+backups/
+*.zip
+*.7z
+*.rar
+*.tar
+*.gz
+
+# 로컬 도구 설정
+.claude/
+.vscode/
+.idea/
+
+# 윈도우 부산물
+Thumbs.db
+desktop.ini
