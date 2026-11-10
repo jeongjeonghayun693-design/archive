@@ -215,15 +215,7 @@ svg.wires {
 .fil { fill: none; stroke: var(--muted); stroke-width: 1.3; stroke-linejoin: round; }
 .node.lit .fil { stroke: #fff4d6; }
 .base { fill: var(--muted); }
-.node.burnt .glass { fill: rgba(125, 147, 157, .12); }
-.node.burnt .fil { stroke: var(--danger); stroke-dasharray: 3 2.5; }
 .bcol { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
-.fix {
-  display: none; padding: 4px 6px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600;
-  border: 1px solid var(--danger); background: var(--panel-2); color: var(--danger);
-}
-.node.burnt .fix { display: block; }
-.node.burnt .bsub { display: none; }
 
 .k-battery.node { --k: var(--bat); }
 .k-bulb.node { --k: var(--amber); }
@@ -375,7 +367,7 @@ body.dragging, body.dragging * { user-select: none; -webkit-user-select: none; }
   <aside class="palette" id="palette" aria-label="부품">
     <div class="label">부품</div>
     <button type="button" class="part k-battery" data-type="battery"><span class="pi" data-icon="battery"></span><span><b>건전지</b><span class="s">1.5 – 24 V</span></span></button>
-    <button type="button" class="part k-bulb" data-type="bulb"><span class="pi" data-icon="bulb"></span><span><b>전구</b><span class="s">2 – 100 Ω · 정격 20 W</span></span></button>
+    <button type="button" class="part k-bulb" data-type="bulb"><span class="pi" data-icon="bulb"></span><span><b>전구</b><span class="s">2 – 100 Ω</span></span></button>
     <button type="button" class="part k-ammeter" data-type="ammeter"><span class="pi" data-icon="ammeter"></span><span><b>전류계</b><span class="s">직렬 연결 · 1 µΩ</span></span></button>
     <button type="button" class="part k-voltmeter" data-type="voltmeter"><span class="pi" data-icon="voltmeter"></span><span><b>전압계</b><span class="s">병렬 연결 · 10 MΩ</span></span></button>
     <p class="note">부품을 누르면 화면 가운데에 놓이고, 끌어다 놓으면 원하는 자리에 놓입니다.</p>
@@ -416,7 +408,7 @@ body.dragging, body.dragging * { user-select: none; -webkit-user-select: none; }
         <li><span class="sw" style="background:var(--amber)"></span><span>도선 위 노란 점이 흐르는 방향이 전류 방향(+ → −)입니다. 전류가 클수록 빨라집니다.</span></li>
         <li><span class="sw" style="background:var(--pos)"></span><span>빨간 포트는 +, 파란 포트는 − 단자입니다. 전류계·전압계는 + 쪽으로 들어오면 양수로 표시됩니다.</span></li>
         <li><span class="sw" style="background:var(--amm)"></span><span>전류계는 저항이 거의 0이라 직렬로, 전압계는 저항이 매우 커서 병렬로 연결합니다.</span></li>
-        <li><span class="sw" style="background:var(--danger)"></span><span>전구 없이 건전지 +와 −가 바로 이어지면 단락입니다. 전구는 20 W를 넘으면 끊어집니다.</span></li>
+        <li><span class="sw" style="background:var(--danger)"></span><span>전구 없이 건전지 +와 −가 바로 이어지면 단락입니다.</span></li>
       </ul>
     </section>
   </aside>
@@ -431,7 +423,6 @@ body.dragging, body.dragging * { user-select: none; -webkit-user-select: none; }
   const R_BAT = 1e-4;      // 건전지 내부저항 (Ω)
   const R_AMM = 1e-6;      // 전류계 내부저항 (Ω) — 건전지 내부저항보다 작게 해서 단락 시 전구가 꺼지도록
   const R_VOLT = 1e7;      // 전압계 내부저항 (Ω)
-  const BULB_MAX = 20;     // 전구 정격 전력 (W) — 넘으면 끊어짐
   const SHORT_A = 20;      // 건전지 전류가 이보다 크면 단락으로 판단 (A)
   const AMM_MAX = 10;      // 전류계 측정 범위 (A)
   const LIT_W = 0.05;      // 이보다 큰 전력이면 전구가 켜진 것으로 판단 (W)
@@ -553,44 +544,38 @@ body.dragging, body.dragging * { user-select: none; -webkit-user-select: none; }
     for (const p of ports) { const r = uf.find(p); if (!netIdx.has(r)) netIdx.set(r, N++); netOf[p] = netIdx.get(r); }
 
     const els = S.nodes.map((n) => ({ n, a: netOf[n.id + ':p'], b: netOf[n.id + ':n'] }));
-    const burned = [];
-    for (let iter = 0; iter < 12; iter++) {
-      for (const e of els) {
-        const t = e.n.type;
-        e.R = t === 'battery' ? R_BAT : t === 'ammeter' ? R_AMM : t === 'voltmeter' ? R_VOLT : (e.n.burnt ? Infinity : e.n.r);
-        e.E = t === 'battery' ? e.n.v : 0;
-      }
-      const isl = makeUF([...Array(N).keys()]);
-      for (const e of els) if (isFinite(e.R) && e.a !== e.b) isl.union(e.a, e.b);
-      const idx = new Int32Array(N), seen = new Set();
-      let k = 0;
-      for (let i = 0; i < N; i++) {
-        const r = isl.find(i);
-        if (!seen.has(r)) { seen.add(r); idx[i] = -1; } else idx[i] = k++;
-      }
-      const G = Array.from({ length: k }, () => new Float64Array(k));
-      const I = new Float64Array(k);
-      for (const e of els) {
-        if (!isFinite(e.R) || e.a === e.b) continue;
-        const g = 1 / e.R, a = idx[e.a], b = idx[e.b];
-        if (a >= 0) G[a][a] += g;
-        if (b >= 0) G[b][b] += g;
-        if (a >= 0 && b >= 0) { G[a][b] -= g; G[b][a] -= g; }
-        if (e.E) { if (a >= 0) I[a] += e.E * g; if (b >= 0) I[b] -= e.E * g; }
-      }
-      const x = solve(G, I);
-      const V = new Float64Array(N);
-      for (let i = 0; i < N; i++) V[i] = idx[i] >= 0 ? x[idx[i]] : 0;
-      let newly = false;
-      for (const e of els) {
-        e.vpn = V[e.a] - V[e.b];                         // + 단자 전위 − (−) 단자 전위
-        if (!isFinite(e.R)) e.ipn = 0;                   // 부품 안을 + 단자 → − 단자로 흐르는 전류
-        else if (e.E) e.ipn = (e.vpn - e.E) / e.R;
-        else e.ipn = e.vpn / e.R;
-        e.P = e.vpn * e.ipn;
-        if (e.n.type === 'bulb' && !e.n.burnt && e.P > BULB_MAX) { e.n.burnt = true; burned.push(e.n.id); newly = true; }
-      }
-      if (!newly) break;
+    for (const e of els) {
+      const t = e.n.type;
+      e.R = t === 'battery' ? R_BAT : t === 'ammeter' ? R_AMM : t === 'voltmeter' ? R_VOLT : e.n.r;
+      e.E = t === 'battery' ? e.n.v : 0;
+    }
+    const isl = makeUF([...Array(N).keys()]);
+    for (const e of els) if (isFinite(e.R) && e.a !== e.b) isl.union(e.a, e.b);
+    const idx = new Int32Array(N), seen = new Set();
+    let k = 0;
+    for (let i = 0; i < N; i++) {
+      const r = isl.find(i);
+      if (!seen.has(r)) { seen.add(r); idx[i] = -1; } else idx[i] = k++;
+    }
+    const G = Array.from({ length: k }, () => new Float64Array(k));
+    const I = new Float64Array(k);
+    for (const e of els) {
+      if (!isFinite(e.R) || e.a === e.b) continue;
+      const g = 1 / e.R, a = idx[e.a], b = idx[e.b];
+      if (a >= 0) G[a][a] += g;
+      if (b >= 0) G[b][b] += g;
+      if (a >= 0 && b >= 0) { G[a][b] -= g; G[b][a] -= g; }
+      if (e.E) { if (a >= 0) I[a] += e.E * g; if (b >= 0) I[b] -= e.E * g; }
+    }
+    const x = solve(G, I);
+    const V = new Float64Array(N);
+    for (let i = 0; i < N; i++) V[i] = idx[i] >= 0 ? x[idx[i]] : 0;
+    for (const e of els) {
+      e.vpn = V[e.a] - V[e.b];                         // + 단자 전위 − (−) 단자 전위
+      if (!isFinite(e.R)) e.ipn = 0;                   // 부품 안을 + 단자 → − 단자로 흐르는 전류
+      else if (e.E) e.ipn = (e.vpn - e.E) / e.R;
+      else e.ipn = e.vpn / e.R;
+      e.P = e.vpn * e.ipn;
     }
 
     // 도선 하나하나의 전류: 같은 마디 안에서 도선을 같은 저항으로 보고 다시 푼다.
@@ -628,7 +613,7 @@ body.dragging, body.dragging * { user-select: none; -webkit-user-select: none; }
       comp[e.n.id] = { a: e.a, b: e.b, ca, cb, vpn: e.vpn, ipn: e.ipn, P: e.P };
       if (e.n.type === 'battery' || e.n.type === 'bulb') { cdeg[ca] = (cdeg[ca] || 0) + 1; cdeg[cb] = (cdeg[cb] || 0) + 1; }
     }
-    return { comp, wire: wireI, burned, cdeg };
+    return { comp, wire: wireI, cdeg };
   }
 
   /* ---------- geometry ---------- */
@@ -704,7 +689,7 @@ body.dragging, body.dragging * { user-select: none; -webkit-user-select: none; }
     if (n.type === 'battery') {
       body = `<div class="step"><button type="button" data-act="dec" aria-label="전압 낮추기">−</button><span class="val" data-f="val"></span><button type="button" data-act="inc" aria-label="전압 높이기">+</button></div><div class="sub" data-f="sub"></div>`;
     } else if (n.type === 'bulb') {
-      body = `<div class="bulbrow"><div class="bulb-ico"><i class="glow"></i>${BULB_SVG}</div><div class="bcol"><div class="step sm"><button type="button" data-act="dec" aria-label="저항 낮추기">−</button><span class="val" data-f="val"></span><button type="button" data-act="inc" aria-label="저항 높이기">+</button></div><div class="sub bsub" data-f="sub"></div><button type="button" class="fix" data-act="fix">새 전구로 교체</button></div></div>`;
+      body = `<div class="bulbrow"><div class="bulb-ico"><i class="glow"></i>${BULB_SVG}</div><div class="bcol"><div class="step sm"><button type="button" data-act="dec" aria-label="저항 낮추기">−</button><span class="val" data-f="val"></span><button type="button" data-act="inc" aria-label="저항 높이기">+</button></div><div class="sub" data-f="sub"></div></div></div>`;
     } else {
       body = `<div class="lcd" data-f="val"></div><div class="sub" data-f="sub"></div>`;
     }
@@ -757,7 +742,7 @@ body.dragging, body.dragging * { user-select: none; -webkit-user-select: none; }
   function addNode(type, x, y) {
     const n = { id: 'c' + S.seq++, type, x: Math.round(clamp(x, -LIMIT, LIMIT)), y: Math.round(clamp(y, -LIMIT, LIMIT)) };
     if (type === 'battery') n.v = 9;
-    if (type === 'bulb') { n.r = 10; n.burnt = false; }
+    if (type === 'bulb') n.r = 10;
     S.nodes.push(n);
     createNodeEl(n);
     sel = { kind: 'node', id: n.id };
@@ -865,11 +850,10 @@ body.dragging, body.dragging * { user-select: none; -webkit-user-select: none; }
         sub.classList.toggle('bad', isShort);
         el.classList.toggle('short', isShort);
       } else if (n.type === 'bulb') {
-        const P = n.burnt ? 0 : Math.max(0, r.P);
+        const P = Math.max(0, r.P);
         const b = clamp(Math.pow(P / 8, 0.55), 0, 1);
         el.style.setProperty('--b', b.toFixed(3));
         el.classList.toggle('lit', P > LIT_W);
-        el.classList.toggle('burnt', !!n.burnt);
         val.textContent = n.r + 'Ω';
         sub.textContent = fmtP(P);
       } else if (n.type === 'ammeter') {
@@ -888,7 +872,6 @@ body.dragging, body.dragging * { user-select: none; -webkit-user-select: none; }
       break;
     }
     prevShort = shortNow;
-    if (sim.burned.length && !booting) toast('전구가 끊어졌어요. 20 W를 넘었습니다. 전압을 낮추거나 저항을 키운 뒤 교체하세요.', 'bad', 4200);
 
     for (const w of S.wires) {
       const I = sim.wire[w.id] || 0;
@@ -903,7 +886,7 @@ body.dragging, body.dragging * { user-select: none; -webkit-user-select: none; }
 
   function checkGoals() {
     const C = sim.comp;
-    const lit = S.nodes.filter((n) => n.type === 'bulb' && !n.burnt && C[n.id].P > LIT_W);
+    const lit = S.nodes.filter((n) => n.type === 'bulb' && C[n.id].P > LIT_W);
     const bats = S.nodes.filter((n) => n.type === 'battery');
     const anyShort = bats.some((n) => Math.abs(C[n.id].ipn) > SHORT_A);
     const key = (c) => (c.ca < c.cb ? c.ca + '|' + c.cb : c.cb + '|' + c.ca);
@@ -972,15 +955,15 @@ body.dragging, body.dragging * { user-select: none; -webkit-user-select: none; }
           ['상태', isShort ? '단락' : Math.abs(out) > 1e-6 ? '사용 중' : '대기', isShort ? 'bad' : ''],
         ]);
       } else if (n.type === 'bulb') {
-        const V = Math.abs(r.vpn), I = Math.abs(r.ipn), P = n.burnt ? 0 : Math.max(0, r.P);
+        const V = Math.abs(r.vpn), I = Math.abs(r.ipn), P = Math.max(0, r.P);
         html = head + rowsHTML([
           ['걸린 전압', fmtV(V)],
           ['흐르는 전류', fmtIFine(I)],
           ['저항', n.r + ' Ω'],
-          ['소비 전력', fmtP(P) + ' / 20 W'],
-          ['상태', n.burnt ? '끊어짐' : P > LIT_W ? '켜짐' : '꺼짐', n.burnt ? 'bad' : P > LIT_W ? 'good' : ''],
+          ['소비 전력', fmtP(P)],
+          ['상태', P > LIT_W ? '켜짐' : '꺼짐', P > LIT_W ? 'good' : ''],
         ]);
-        if (!n.burnt) html += `<div class="ohm">V = I × R → <b>${V.toFixed(2)} V</b> = ${I.toFixed(3)} A × ${n.r} Ω</div>`;
+        html += `<div class="ohm">V = I × R → <b>${V.toFixed(2)} V</b> = ${I.toFixed(3)} A × ${n.r} Ω</div>`;
       } else if (n.type === 'ammeter') {
         html = head + rowsHTML([
           ['측정 전류', Math.abs(r.ipn) > AMM_MAX ? '범위 초과' : fmtIFine(r.ipn), Math.abs(r.ipn) > AMM_MAX ? 'bad' : ''],
@@ -1157,7 +1140,6 @@ body.dragging, body.dragging * { user-select: none; -webkit-user-select: none; }
     if (act === 'del') removeNode(n.id);
     else if (act === 'inc') stepValue(n, 1);
     else if (act === 'dec') stepValue(n, -1);
-    else if (act === 'fix') { n.burnt = false; changed(); toast('새 전구로 바꿨습니다.'); }
   });
 
   /* ---------- parts shelf ---------- */
@@ -1248,7 +1230,7 @@ body.dragging, body.dragging * { user-select: none; -webkit-user-select: none; }
       if (!n || !TYPES[n.type] || typeof n.id !== 'string' || ids.has(n.id) || !isFinite(n.x) || !isFinite(n.y)) continue;
       const m = { id: n.id, type: n.type, x: clamp(+n.x, -LIMIT, LIMIT), y: clamp(+n.y, -LIMIT, LIMIT) };
       if (n.type === 'battery') m.v = VOLTS.includes(n.v) ? n.v : 9;
-      if (n.type === 'bulb') { m.r = OHMS.includes(n.r) ? n.r : 10; m.burnt = !!n.burnt; }
+      if (n.type === 'bulb') m.r = OHMS.includes(n.r) ? n.r : 10;
       nodes.push(m); ids.add(m.id);
     }
     const okPort = (k) => typeof k === 'string' && /^.+:[pn]$/.test(k) && ids.has(k.slice(0, -2));
@@ -1287,7 +1269,7 @@ body.dragging, body.dragging * { user-select: none; -webkit-user-select: none; }
       seq: 7, done: {},
       nodes: [
         { id: 'c1', type: 'battery', x: L[0][0], y: L[0][1], v: 9 },
-        { id: 'c2', type: 'bulb', x: L[2][0], y: L[2][1], r: 10, burnt: false },
+        { id: 'c2', type: 'bulb', x: L[2][0], y: L[2][1], r: 10 },
         { id: 'c3', type: 'ammeter', x: L[1][0], y: L[1][1] },
         { id: 'c4', type: 'voltmeter', x: L[3][0], y: L[3][1] },
       ],
@@ -1304,7 +1286,7 @@ body.dragging, body.dragging * { user-select: none; -webkit-user-select: none; }
       nodes: [
         { id: 'c1', type: 'battery', x: L[0][0], y: L[0][1], v: 9 },
         { id: 'c2', type: 'ammeter', x: L[1][0], y: L[1][1] },
-        { id: 'c3', type: 'bulb', x: L[2][0], y: L[2][1], r: 10, burnt: false },
+        { id: 'c3', type: 'bulb', x: L[2][0], y: L[2][1], r: 10 },
         { id: 'c4', type: 'voltmeter', x: L[3][0], y: L[3][1] },
       ],
       wires: [
