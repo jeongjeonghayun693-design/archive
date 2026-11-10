@@ -28,6 +28,9 @@
   --pos: #ff6b6b;
   --neg: #5b9dff;
   --danger: #ff4d5e;
+  --face: #ebe5d3;
+  --ink: #23292c;
+  --needle: #d8342c;
   --ok: #5ed39a;
   --wire: #44606c;
   --wire-live: #8a6a2a;
@@ -178,6 +181,26 @@ svg.wires {
 .lcd.over { color: var(--danger); }
 .sub { font: 500 11px/1.2 var(--f-mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sub.bad { color: var(--danger); }
+.nh .mode {
+  height: 20px; padding: 0 6px; border-radius: 5px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--panel-2); color: var(--muted);
+  font: 600 10.5px/1 var(--f-body);
+}
+.nh .mode:hover { border-color: var(--k); color: var(--fg); }
+.gauge { display: none; width: 100%; height: 70px; }
+.node.analog .nb { padding-block: 7px; }
+.node.analog .gauge { display: block; }
+.node.analog .lcd, .node.analog .sub { display: none; }
+.g-face { fill: var(--face); stroke: var(--line); }
+.g-arc { fill: none; stroke: var(--ink); stroke-width: 1.2; }
+.g-tick { stroke: var(--ink); stroke-width: 1; stroke-linecap: round; }
+.g-tick.major { stroke-width: 1.6; }
+.g-lab { fill: var(--ink); font: 600 7px var(--f-mono); text-anchor: middle; dominant-baseline: central; }
+.g-unit { fill: var(--ink); font: 700 12px var(--f-display); text-anchor: middle; dominant-baseline: central; }
+.g-unit.bad { fill: var(--needle); font-size: 9px; }
+.g-needle { transform-box: view-box; transform-origin: 70px 64px; transition: transform .45s cubic-bezier(.3, 1.35, .5, 1); }
+.g-needle line { stroke: var(--needle); stroke-width: 1.8; stroke-linecap: round; }
+.g-pivot { fill: var(--ink); }
 .step { display: flex; align-items: center; gap: 6px; }
 .step button {
   width: 26px; height: 26px; flex: none; border-radius: 6px; cursor: pointer;
@@ -340,6 +363,7 @@ svg.wires {
 body.dragging, body.dragging * { user-select: none; -webkit-user-select: none; }
 @media (prefers-reduced-motion: reduce) {
   .node.short, .port.pending { animation: none; }
+  .g-needle { transition: none; }
   .side, .toast, .progress i { transition: none; }
 }
 </style>
@@ -407,7 +431,7 @@ body.dragging, body.dragging * { user-select: none; -webkit-user-select: none; }
       <ul class="legend">
         <li><span class="sw" style="background:var(--amber)"></span><span>도선 위 노란 점이 흐르는 방향이 전류 방향(+ → −)입니다. 전류가 클수록 빨라집니다.</span></li>
         <li><span class="sw" style="background:var(--pos)"></span><span>빨간 포트는 +, 파란 포트는 − 단자입니다. 전류계·전압계는 + 쪽으로 들어오면 양수로 표시됩니다.</span></li>
-        <li><span class="sw" style="background:var(--amm)"></span><span>전류계는 저항이 거의 0이라 직렬로, 전압계는 저항이 매우 커서 병렬로 연결합니다.</span></li>
+        <li><span class="sw" style="background:var(--amm)"></span><span>전류계는 저항이 거의 0이라 직렬로, 전압계는 저항이 매우 커서 병렬로 연결합니다. 계기 머리의 <b>바늘</b>/<b>숫자</b> 버튼으로 표시 방식을 바꿀 수 있습니다.</span></li>
         <li><span class="sw" style="background:var(--danger)"></span><span>전구 없이 건전지 +와 −가 바로 이어지면 단락입니다.</span></li>
       </ul>
     </section>
@@ -677,6 +701,67 @@ body.dragging, body.dragging * { user-select: none; -webkit-user-select: none; }
   const pathD = (p) => `M${p[0].x} ${p[0].y}C${p[1].x} ${p[1].y} ${p[2].x} ${p[2].y} ${p[3].x} ${p[3].y}`;
   const midPt = (p) => ({ x: (p[0].x + 3 * p[1].x + 3 * p[2].x + p[3].x) / 8, y: (p[0].y + 3 * p[1].y + 3 * p[2].y + p[3].y) / 8 });
 
+  /* ---------- analog gauge (바늘 눈금) ----------
+     자동 범위: 값이 들어가는 가장 작은 범위를 고른다. 눈금은 범위를 5칸으로 나눈다.          */
+  const A_RANGES = [
+    { max: 0.1, div: 1e-3, unit: 'mA' }, { max: 0.5, div: 1e-3, unit: 'mA' },
+    { max: 1, div: 1, unit: 'A' }, { max: 5, div: 1, unit: 'A' }, { max: 10, div: 1, unit: 'A' },
+  ];
+  const V_RANGES = [
+    { max: 5, div: 1, unit: 'V' }, { max: 10, div: 1, unit: 'V' }, { max: 25, div: 1, unit: 'V' },
+    { max: 50, div: 1, unit: 'V' }, { max: 250, div: 1, unit: 'V' },
+  ];
+  const G_CX = 70, G_CY = 64, G_R = 52, G_SWEEP = 60;   // 바늘 회전축, 눈금 반지름, 0 기준 좌우 각도
+  const isMeter = (n) => n.type === 'ammeter' || n.type === 'voltmeter';
+  const modeBtnHTML = (n) => n.mode === 'analog'
+    ? '<button type="button" class="mode" data-act="mode" aria-label="숫자로 보기">숫자</button>'
+    : '<button type="button" class="mode" data-act="mode" aria-label="바늘 눈금으로 보기">바늘</button>';
+  const polar = (r, deg) => {
+    const a = deg * Math.PI / 180;
+    return [+(G_CX + r * Math.sin(a)).toFixed(2), +(G_CY - r * Math.cos(a)).toFixed(2)];
+  };
+  const GAUGE_SVG = (() => {
+    const [ax, ay] = polar(G_R, -G_SWEEP), [bx, by] = polar(G_R, G_SWEEP);
+    return `<svg class="gauge" viewBox="0 0 140 70" aria-hidden="true">` +
+      `<rect class="g-face" x="0.5" y="0.5" width="139" height="69" rx="6"></rect>` +
+      `<path class="g-arc" d="M${ax} ${ay}A${G_R} ${G_R} 0 0 1 ${bx} ${by}"></path>` +
+      `<g class="g-scale"></g>` +
+      `<text class="g-unit" x="70" y="47"></text>` +
+      `<g class="g-needle"><line x1="70" y1="69" x2="70" y2="16"></line></g>` +
+      `<circle class="g-pivot" cx="70" cy="64" r="3.5"></circle></svg>`;
+  })();
+  function scaleSVG(rg) {
+    let out = '';
+    for (let i = 0; i <= 10; i++) {
+      const deg = -G_SWEEP + (2 * G_SWEEP) * i / 10, major = i % 2 === 0;
+      const [x1, y1] = polar(G_R, deg), [x2, y2] = polar(G_R - (major ? 7 : 4), deg);
+      out += `<line class="g-tick${major ? ' major' : ''}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"></line>`;
+      if (major) {
+        const [lx, ly] = polar(G_R - 15, deg);
+        const v = +((rg.max * i / 10) / rg.div).toFixed(2);
+        const txt = String(v).replace(/^0\./, '.');      // 0.2 → .2 (계기 눈금 표기)
+        out += `<text class="g-lab" x="${lx}" y="${ly}">${txt}</text>`;
+      }
+    }
+    return out;
+  }
+  function updateGauge(el, ranges, value) {
+    const a = Math.abs(value);
+    const rg = ranges.find((r) => a <= r.max) || ranges[ranges.length - 1];
+    const key = rg.max + rg.unit;
+    if (el.dataset.range !== key) {
+      el.dataset.range = key;
+      el.querySelector('.g-scale').innerHTML = scaleSVG(rg);
+    }
+    const over = a > ranges[ranges.length - 1].max;
+    const reversed = value < 0 && a / rg.max > 0.005;
+    const frac = clamp(value / rg.max, -0.04, 1.04);      // 범위를 넘으면 바늘이 끝에 걸린다
+    el.querySelector('.g-needle').style.transform = `rotate(${(-G_SWEEP + 2 * G_SWEEP * frac).toFixed(2)}deg)`;
+    const unit = el.querySelector('.g-unit');
+    unit.textContent = over ? '범위 초과' : reversed ? '극성 반대' : rg.unit;
+    unit.classList.toggle('bad', over || reversed);
+  }
+
   /* ---------- DOM: nodes ---------- */
   function portHTML(t, side, cls) {
     const s = t.sign[side];
@@ -691,12 +776,12 @@ body.dragging, body.dragging * { user-select: none; -webkit-user-select: none; }
     } else if (n.type === 'bulb') {
       body = `<div class="bulbrow"><div class="bulb-ico"><i class="glow"></i>${BULB_SVG}</div><div class="bcol"><div class="step sm"><button type="button" data-act="dec" aria-label="저항 낮추기">−</button><span class="val" data-f="val"></span><button type="button" data-act="inc" aria-label="저항 높이기">+</button></div><div class="sub" data-f="sub"></div></div></div>`;
     } else {
-      body = `<div class="lcd" data-f="val"></div><div class="sub" data-f="sub"></div>`;
+      body = `<div class="lcd" data-f="val"></div><div class="sub" data-f="sub"></div>${GAUGE_SVG}`;
     }
     const el = document.createElement('div');
-    el.className = `node k-${n.type}`;
+    el.className = `node k-${n.type}` + (n.mode === 'analog' ? ' analog' : '');
     el.dataset.id = n.id;
-    el.innerHTML = `<div class="nh"><span class="dot"></span><span class="nm">${t.name}</span><button type="button" class="x" data-act="del" aria-label="${t.name} 삭제">×</button></div><div class="nb">${body}</div>` +
+    el.innerHTML = `<div class="nh"><span class="dot"></span><span class="nm">${t.name}</span>${isMeter(n) ? modeBtnHTML(n) : ''}<button type="button" class="x" data-act="del" aria-label="${t.name} 삭제">×</button></div><div class="nb">${body}</div>` +
       portHTML(t, t.left, 'left') + portHTML(t, t.right, 'right');
     el.style.zIndex = ++zTop;
     world.appendChild(el);
@@ -743,6 +828,7 @@ body.dragging, body.dragging * { user-select: none; -webkit-user-select: none; }
     const n = { id: 'c' + S.seq++, type, x: Math.round(clamp(x, -LIMIT, LIMIT)), y: Math.round(clamp(y, -LIMIT, LIMIT)) };
     if (type === 'battery') n.v = 9;
     if (type === 'bulb') n.r = 10;
+    if (type === 'ammeter' || type === 'voltmeter') n.mode = S.meterMode === 'analog' ? 'analog' : 'digital';
     S.nodes.push(n);
     createNodeEl(n);
     sel = { kind: 'node', id: n.id };
@@ -862,9 +948,11 @@ body.dragging, body.dragging * { user-select: none; -webkit-user-select: none; }
         val.classList.toggle('over', over);
         sub.textContent = over ? '측정 범위 ±10 A 초과' : '범위 ±10 A';
         sub.classList.toggle('bad', over);
+        updateGauge(el, A_RANGES, r.ipn);
       } else {
         val.textContent = fmtV(r.vpn);
         sub.textContent = '내부저항 10 MΩ';
+        updateGauge(el, V_RANGES, r.vpn);
       }
     }
     for (const id of shortNow) if (!prevShort.has(id) && !booting) {
@@ -1140,6 +1228,14 @@ body.dragging, body.dragging * { user-select: none; -webkit-user-select: none; }
     if (act === 'del') removeNode(n.id);
     else if (act === 'inc') stepValue(n, 1);
     else if (act === 'dec') stepValue(n, -1);
+    else if (act === 'mode') {
+      n.mode = n.mode === 'analog' ? 'digital' : 'analog';
+      S.meterMode = n.mode;                       // 새로 놓는 계기도 같은 방식으로
+      const el = nodeEls.get(n.id);
+      el.classList.toggle('analog', n.mode === 'analog');
+      el.querySelector('.mode').outerHTML = modeBtnHTML(n);
+      save();
+    }
   });
 
   /* ---------- parts shelf ---------- */
@@ -1231,6 +1327,7 @@ body.dragging, body.dragging * { user-select: none; -webkit-user-select: none; }
       const m = { id: n.id, type: n.type, x: clamp(+n.x, -LIMIT, LIMIT), y: clamp(+n.y, -LIMIT, LIMIT) };
       if (n.type === 'battery') m.v = VOLTS.includes(n.v) ? n.v : 9;
       if (n.type === 'bulb') m.r = OHMS.includes(n.r) ? n.r : 10;
+      if (isMeter(n)) m.mode = n.mode === 'analog' ? 'analog' : 'digital';
       nodes.push(m); ids.add(m.id);
     }
     const okPort = (k) => typeof k === 'string' && /^.+:[pn]$/.test(k) && ids.has(k.slice(0, -2));
@@ -1240,7 +1337,7 @@ body.dragging, body.dragging * { user-select: none; -webkit-user-select: none; }
     for (const x of [...nodes, ...wires]) { const num = parseInt(x.id.slice(1), 10); if (num >= seq) seq = num + 1; }
     const done = {};
     if (raw.done && typeof raw.done === 'object') for (const g of GOALS) if (raw.done[g.id]) done[g.id] = true;
-    return { nodes, wires, seq, done };
+    return { nodes, wires, seq, done, meterMode: raw.meterMode === 'analog' ? 'analog' : 'digital' };
   }
   function load(data) {
     for (const el of nodeEls.values()) el.remove();
@@ -1250,6 +1347,8 @@ body.dragging, body.dragging * { user-select: none; -webkit-user-select: none; }
     sel = null;
     clearPending();
     prevShort = new Set();
+    if (!data.meterMode) data.meterMode = S.meterMode === 'analog' ? 'analog' : 'digital';
+    for (const n of data.nodes) if (isMeter(n) && !n.mode) n.mode = data.meterMode;
     S = data;
     for (const n of S.nodes) createNodeEl(n);
     for (const w of S.wires) createWireEl(w);
